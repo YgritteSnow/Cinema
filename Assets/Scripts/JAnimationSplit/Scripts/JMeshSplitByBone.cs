@@ -27,7 +27,7 @@ public class JMeshSplitByBone : MonoBehaviour {
 		SkinnedMeshRenderer[] renderers = GetComponentsInChildren<SkinnedMeshRenderer>();
 		for (int i = 0; i != renderers.Length; ++i)
 		{
-			//DoSplitOne(renderers[i], m_focus_bones[0]);
+			DoSplitOne(renderers[i], m_focus_bones[0]);
 		}
 	}
 
@@ -42,14 +42,14 @@ public class JMeshSplitByBone : MonoBehaviour {
 		return m_focus_bones_parent;
 	}
 
-	Dictionary<int, int> GetBoneIdx2ParentIdx(SkinnedMeshRenderer renderer, string focus_name, out int focus_idx, out int focus_parentIdx)
+	Dictionary<int, int> GetBoneIdx2ParentIdx(SkinnedMeshRenderer child_renderer, string focus_name, out int focus_idx, out int focus_parentIdx)
 	{
 		Dictionary<string, int> bone_name_2_idx = new Dictionary<string, int>();
 		Dictionary<int, string> bone_idx_2_parentName = new Dictionary<int, string>();
-		for (int i = 0; i != renderer.bones.Length; ++i)
+		for (int i = 0; i != child_renderer.bones.Length; ++i)
 		{
-			bone_name_2_idx[renderer.bones[i].name] = i;
-			bone_idx_2_parentName[i] = renderer.bones[i].parent.name;
+			bone_name_2_idx[child_renderer.bones[i].name] = i;
+			bone_idx_2_parentName[i] = child_renderer.bones[i].parent.name;
 		}
 		Dictionary<int, int> bone_idx_2_parentIdx = new Dictionary<int, int>();
 		foreach (KeyValuePair<int, string> bone in bone_idx_2_parentName)
@@ -61,12 +61,12 @@ public class JMeshSplitByBone : MonoBehaviour {
 		return bone_idx_2_parentIdx;
 	}
 
-	Dictionary<int, bool> GetBoneIsChildMap(SkinnedMeshRenderer renderer, string focus_name)
+	Dictionary<int, bool> GetBoneIsChildMap(SkinnedMeshRenderer child_renderer, string focus_name)
 	{
 		Dictionary<int, bool> res = new Dictionary<int, bool>();
-		for (int i = 0; i != renderer.bones.Length; ++i)
+		for (int i = 0; i != child_renderer.bones.Length; ++i)
 		{
-			Transform cur_trans = renderer.bones[i];
+			Transform cur_trans = child_renderer.bones[i];
 			bool is_child = false;
 			while(cur_trans != null)
 			{
@@ -147,7 +147,7 @@ public class JMeshSplitByBone : MonoBehaviour {
 	}
 
 	#region 统计三角形边 => 三角形列表
-	Dictionary<int, List<int>> GetTriangleEdge2Triangle(List<int> triangles, Mesh mesh)
+	Dictionary<int, List<int>> GetTriangleEdge2Triangle(int[] triangles, Mesh mesh)
 	{
 		Dictionary<int, List<int>> edge_2_triangle = new Dictionary<int, List<int>>();
 		foreach (int triangle_idx in triangles)
@@ -181,14 +181,14 @@ public class JMeshSplitByBone : MonoBehaviour {
 	#endregion
 
 	#region 计算三角形 => 相邻三角形列表
-	Dictionary<int, List<int>> GetTriangle2TriangleList(List<int> triangles, Mesh mesh, Dictionary<int, List<int>> edge_2_triangle)
+	Dictionary<int, List<int>> GetTriangle2TriangleList(int[] triangles, Mesh mesh, Dictionary<int, List<int>> edge_2_triangle)
 	{
 		Dictionary<int, List<int>> triangle_2_neighbours = new Dictionary<int, List<int>>();
 		foreach (int triangle_idx in triangles)
 		{
-			int vi1 = mesh.triangles[triangle_idx];
-			int vi2 = mesh.triangles[triangle_idx];
-			int vi3 = mesh.triangles[triangle_idx];
+			int vi1 = mesh.triangles[triangle_idx+0];
+			int vi2 = mesh.triangles[triangle_idx+1];
+			int vi3 = mesh.triangles[triangle_idx+2];
 			triangle_2_neighbours[triangle_idx] = new List<int>();
 
 			int edge_id = VertexIdxToEdgeId(vi1, vi2);
@@ -222,136 +222,203 @@ public class JMeshSplitByBone : MonoBehaviour {
 	}
 	#endregion
 
+	#region 顶点 => 邻居顶点列表
+	Dictionary<int, List<int>> GetVertex2VertexList(int[] cross_triangles, Mesh mesh, Dictionary<int, List<int>> edge_2_triangle)
+	{
+		Dictionary<int, List<int>> res = new Dictionary<int,List<int>>();
+		foreach(int triangle in cross_triangles)
+		{
+			TraverseTriangleEdge(triangle, mesh, delegate(int v1, int v2, int v3)
+			{
+				if(!res.ContainsKey(v1))
+				{
+					res[v1] = new List<int>();	
+				}
+				bool already_has_v2 = false;
+				bool already_has_v3 = false;
+				foreach(int nei_vert in res[v1])
+				{
+					already_has_v2 = already_has_v2 || nei_vert == v2;
+					already_has_v3 = already_has_v3 || nei_vert == v3;
+				}
+				if(!already_has_v2)
+				{
+					res[v1].Add(v2);
+				}
+				if (!already_has_v3)
+				{
+					res[v1].Add(v3);
+				}
+				return true;
+			});
+		}
+		return res;
+	}
+	#endregion
+
 	#region 将三角形列表根据其“跨越父子骨骼的程度”排序
 	[System.Obsolete("Should not be useful. Sort func needs to be optimized by the way", true)]
-	void SortTriangleListByParam(SkinnedMeshRenderer renderer, string focus_bone, List<int> cross_triangles)
+	void SortTriangleListByParam(SkinnedMeshRenderer child_renderer, string focus_bone, List<int> cross_triangles)
 	{
-		Dictionary<int, bool> bone_is_child = GetBoneIsChildMap(renderer, focus_bone);
+		Dictionary<int, bool> bone_is_child = GetBoneIsChildMap(child_renderer, focus_bone);
 		cross_triangles.Sort(delegate (int lt, int rt)
 			{
-				float lparam = CalTriangleCrossParam(lt, renderer.sharedMesh, bone_is_child);
-				float rparam = CalTriangleCrossParam(rt, renderer.sharedMesh, bone_is_child);
+				float lparam = CalTriangleCrossParam(lt, child_renderer.sharedMesh, bone_is_child);
+				float rparam = CalTriangleCrossParam(rt, child_renderer.sharedMesh, bone_is_child);
 				return lparam > rparam ? -1 : (lparam < rparam ? 1 : 0);
 			});
 	}
 	#endregion
 
-	void DoSplitOne(SkinnedMeshRenderer renderer, string focus_bone)
+	void DoSplitOne(SkinnedMeshRenderer child_renderer, string focus_bone)
 	{
-		Dictionary<int, bool> bone_idx_is_child = GetBoneIsChildMap(renderer, focus_bone);
+		Dictionary<int, bool> bone_idx_is_child = GetBoneIsChildMap(child_renderer, focus_bone);
 
-		// 遍历所有三角形，与该骨骼和其父骨骼都有关的三角形
-		// 如果这些点不足以获得一个闭合曲线，其实应当再去孩子和祖父中寻找。TODO
-		List<int> cross_triangles = new List<int>();
-		List<int> child_triangles = new List<int>();
-		List<int> parent_triangles = new List<int>();
-		Mesh mesh = renderer.sharedMesh;
-		for (int i = 0; i != mesh.triangles.Length; i = i + 3)
+		Mesh mesh = child_renderer.sharedMesh;
+
+		// 遍历所有三角形，根据绑定关系，区分“完全是孩子的三角形”、“完全是父亲的三角形”、“介于两者之间的三角形”
+		int[] cross_triangles, child_triangles, parent_triangles;
+		int[] vertex_side_state;
+		CalVertexOnSideState(mesh, bone_idx_is_child, out vertex_side_state, out cross_triangles, out child_triangles, out parent_triangles);
+
+		if(cross_triangles.Length != 0)
+		{
+			Dictionary<int, bool> child_side_vertex, parent_side_vertex; // 在cross_triangle中，同时位于child_side/parent_side的点
+			FindSplitVertexOnTwoSides(mesh, vertex_side_state, out child_side_vertex, out parent_side_vertex);
+
+			List<int> cross_child_triangles;
+			List<int> cross_parent_triangles;
+			SplitChildAndParent(mesh, cross_triangles, child_side_vertex, parent_side_vertex, bone_idx_is_child, out cross_child_triangles, out cross_parent_triangles);
+
+			int[] final_child_triangles = new int[child_triangles.Length + cross_child_triangles.Count];
+			child_triangles.CopyTo(final_child_triangles, 0);
+			cross_child_triangles.CopyTo(final_child_triangles, child_triangles.Length);
+
+			int[] final_parent_triangles = new int[parent_triangles.Length + cross_parent_triangles.Count];
+			parent_triangles.CopyTo(final_parent_triangles, 0);
+			cross_parent_triangles.CopyTo(final_parent_triangles, parent_triangles.Length);
+		}
+
+		// 将child和parent分别存储为mesh
+		if(child_triangles.Length > 0)
+		{
+			Mesh new_child_mesh = JMeshUtility.SplitTriangleToMesh(child_triangles, mesh);
+			GameObject new_child = GameObject.Instantiate(child_renderer.gameObject);
+			new_child.GetComponent<SkinnedMeshRenderer>().sharedMesh = new_child_mesh;
+		}
+		if(parent_triangles.Length > 0)
+		{
+			Mesh new_parent_mesh = JMeshUtility.SplitTriangleToMesh(parent_triangles, mesh);
+			GameObject new_parent = GameObject.Instantiate(child_renderer.gameObject);
+			new_parent.GetComponent<SkinnedMeshRenderer>().sharedMesh = new_parent_mesh;
+		}
+
+		// 隐藏原模型
+		child_renderer.gameObject.SetActive(false);
+	}
+
+	void CalVertexOnSideState(Mesh mesh, Dictionary<int, bool> bone_idx_is_child, out int[] vertice_state, out int[] cross_triangles, out int[] child_triangles, out int[] parent_triangles)
+	{
+		int child_triangle_count = 0;
+		int parent_triangle_count = 0;
+		int cross_triangle_count = 0;
+		vertice_state = new int[mesh.vertices.Length];
+		int[] triangle_side_state = new int[mesh.triangles.Length / 3];
+		for (int triangle_idx = 0; triangle_idx < mesh.triangles.Length; triangle_idx = triangle_idx + 3)
 		{
 			bool has_childIdx = false;
 			bool has_parentIdx = false;
 			for (int j = 0; j < 3; ++j)
 			{
-				int vi = mesh.triangles[i + j];
+				int vi = mesh.triangles[triangle_idx + j];
 				BoneWeight vw = mesh.boneWeights[vi];
-				if (bone_idx_is_child.ContainsKey(vw.boneIndex0) || bone_idx_is_child.ContainsKey(vw.boneIndex1))
+				bool is_bone0_child = vw.boneIndex0 != 0 && bone_idx_is_child[vw.boneIndex0];
+				bool is_bone1_child = vw.boneIndex1 != 0 && bone_idx_is_child[vw.boneIndex1];
+				bool is_bone0_parent = vw.boneIndex0 != 0 && !is_bone0_child;
+				bool is_bone1_parent = vw.boneIndex1 != 0 && !is_bone1_child;
+
+				// 统计顶点所属部位
+				if(is_bone0_child || is_bone1_child)
 				{
 					has_childIdx = true;
+					vertice_state[vi] |= 0x1;
 				}
-
-				if (!bone_idx_is_child.ContainsKey(vw.boneIndex0) || !bone_idx_is_child.ContainsKey(vw.boneIndex1))
+				if (is_bone0_parent || is_bone1_parent)
 				{
 					has_parentIdx = true;
+					vertice_state[vi] |= 0x2;
 				}
 			}
-			if(has_childIdx && has_parentIdx)
+
+			// 统计三角形所属部位
+			if (has_childIdx && has_parentIdx)
 			{
-				cross_triangles.Add(i);
+				triangle_side_state[triangle_idx/3] |= 0x4; // 0x4 代表cross
+				++cross_triangle_count;
 			}
-			else if(has_childIdx)
+			else if (has_childIdx)
 			{
-				child_triangles.Add(i);
+				triangle_side_state[triangle_idx/3] |= 0x1;
+				++child_triangle_count;
 			}
-			else if(has_parentIdx)
+			else if (has_parentIdx)
 			{
-				parent_triangles.Add(i);
+				triangle_side_state[triangle_idx/3] |= 0x2;
+				++parent_triangle_count;
 			}
 		}
 
-		if(cross_triangles.Count != 0)
+		// 统计三角形们
+		cross_triangles = new int[cross_triangle_count];
+		int cross_triangle_iter = 0;
+		child_triangles = new int[child_triangle_count];
+		int child_triangle_iter = 0;
+		parent_triangles = new int[parent_triangle_count];
+		int parent_triangle_iter = 0;
+		for(int triangle_idx = 0; triangle_idx != triangle_side_state.Length; ++triangle_idx)
 		{
-			List<int> child_side_vertex, parent_side_vertex;
-			FindSplitVertexOnTwoSides(mesh, cross_triangles, child_triangles, parent_triangles, bone_idx_is_child, out child_side_vertex, out parent_side_vertex);
-
-			List<int> cross_child_triangles;
-			List<int> cross_parent_triangles;
-			SplitChildAndParent(mesh, cross_triangles, child_side_vertex, parent_side_vertex, bone_idx_is_child, out cross_child_triangles, out cross_parent_triangles);
+			if(triangle_side_state[triangle_idx] == 0x4)
+			{
+				cross_triangles[cross_triangle_iter++] = triangle_idx * 3;
+			}
+			else if(triangle_side_state[triangle_idx] == 0x1)
+			{
+				child_triangles[child_triangle_iter++] = triangle_idx * 3;
+			}
+			else if (triangle_side_state[triangle_idx] == 0x2)
+			{
+				parent_triangles[parent_triangle_iter++] = triangle_idx * 3;
+			}
 		}
-
-		// 将child和parent分别存储为mesh
-		// 
+		return;
 	}
 	
 	// 找到位于两个轮廓上的顶点
-	void FindSplitVertexOnTwoSides(Mesh mesh, List<int> cross_triangles, List<int> child_triangles, List<int> parent_triangles, Dictionary<int, bool> bone_idx_is_child, out List<int> child_side_vertex, out List<int> parent_side_vertex)
+	void FindSplitVertexOnTwoSides(Mesh mesh, int[] vertex_side_state
+		, out Dictionary<int, bool> child_side_vertex, out Dictionary<int, bool> parent_side_vertex)
 	{
-		child_side_vertex = new List<int>();
-		parent_side_vertex = new List<int>();
-		foreach (int triangle_idx in cross_triangles)
+		child_side_vertex = new Dictionary<int, bool>();
+		parent_side_vertex = new Dictionary<int, bool>();
+		for(int vidx = 0; vidx != vertex_side_state.Length; ++vidx)
 		{
-			for(int vi = 0; vi < 3; ++vi)
+			if((vertex_side_state[vidx] | 0x1) == 0x1)
 			{
-				int vindex = mesh.triangles[triangle_idx + vi];
-				BoneWeight vweight = mesh.boneWeights[vindex];
-				if(vweight.boneIndex1 == 0) // 只查找那些仅含有1个骨骼作为其绑定的顶点
-				{
-					bool has_index = false;
-					if (bone_idx_is_child.ContainsKey(vweight.boneIndex0))
-					{
-						foreach (int child_triangle_idx in child_triangles)
-						{
-							for (int childvi = 0; childvi < 3; ++childvi)
-							{
-								if (mesh.triangles[child_triangle_idx + childvi] == vindex)
-								{
-									has_index = true;
-									break;
-								}
-							}
-						}
-						if(has_index)
-						{
-							child_side_vertex.Add(vindex);
-						}
-					}
-					else
-					{
-						foreach (int child_triangle_idx in parent_triangles)
-						{
-							for (int childvi = 0; childvi < 3; ++childvi)
-							{
-								if (mesh.triangles[child_triangle_idx + childvi] == vindex)
-								{
-									has_index = true;
-									break;
-								}
-							}
-						}
-						if (has_index)
-						{
-							parent_side_vertex.Add(vindex);
-						}
-					}
-				}
+				child_side_vertex[vidx] = true;
+			}
+			else if ((vertex_side_state[vidx] | 0x2) == 0x2)
+			{
+				parent_side_vertex[vidx] = true;
 			}
 		}
 	}
 
 	// 找到三角形带的分割线
-	void SplitChildAndParent(Mesh mesh, List<int> cross_triangle, List<int> child_side_vertex, List<int> parent_side_vertex, Dictionary<int, bool> bone_idx_is_child, out List<int> cross_child_triangles, out List<int> cross_parent_triangles)
+	void SplitChildAndParent(Mesh mesh, int[] cross_triangle, Dictionary<int, bool> child_side_vertex, Dictionary<int, bool> parent_side_vertex, Dictionary<int, bool> bone_idx_is_child, out List<int> cross_child_triangles, out List<int> cross_parent_triangles)
 	{
-		cross_child_triangles = new List<int>();
-		cross_parent_triangles = new List<int>();
+		// 建立边=>三角形的索引
+		Dictionary<int, List<int>> edge_2_triangle = GetTriangleEdge2Triangle(cross_triangle, mesh);
+		// 建立顶点=>邻接顶点的索引
+		Dictionary<int, List<int>> vert_2_neigh = GetVertex2VertexList(cross_triangle, mesh, edge_2_triangle);
 
 		Dictionary<int, float> all_vert_param = new Dictionary<int, float>();
 		foreach(int triangle in cross_triangle)
@@ -387,86 +454,397 @@ public class JMeshSplitByBone : MonoBehaviour {
 		});
 
 		// 选取权重最高的那个点为第1个点
-		int path_vert = all_vert[0]; 
-		// 在孩子这边的所有顶点中寻找最近的那个点
-		int child_vert = child_side_vertex[0];
-		float min_child_dist = CalVertDist(mesh, path_vert, child_vert);
-		for(int vidx_iter = 1; vidx_iter != child_side_vertex.Count; ++vidx_iter)
+		int path_vert = all_vert[0];
+		int path_vert_neigh = vert_2_neigh[path_vert][0];
+		int path_vert_other_nei = -1;
+		int edge_id = VertexIdxToEdgeId(path_vert, path_vert_neigh);
+		int path_start_triangle = edge_2_triangle[edge_id][0];
+
+		int need_search_child = -1;
+		int need_search_parent = -1;
+		TraverseTriangleEdge(path_start_triangle, mesh, delegate(int v1, int v2, int v3)
 		{
-			int vidx = child_side_vertex[vidx_iter];
-			float new_dist = CalVertDist(mesh, path_vert, vidx);
-			if(new_dist < min_child_dist)
+			if(v1 != path_vert)
 			{
-				child_vert = vidx;
-				min_child_dist = new_dist;
+				if(child_side_vertex.ContainsKey(v1))
+				{
+					need_search_child = v1;
+				}
+				else if(parent_side_vertex.ContainsKey(v1))
+				{
+					need_search_parent = v1;
+				}
+
+				if (v1 != path_vert_neigh)
+				{
+					path_vert_other_nei = v1;
+				}
 			}
-		}
-		// 在父亲这边的所有顶点中寻找最近的那个点
-		int parent_vert = parent_side_vertex[0];
-		float min_parent_dist = CalVertDist(mesh, path_vert, parent_vert);
-		for (int vidx_iter = 1; vidx_iter != parent_side_vertex.Count; ++vidx_iter)
+			return true;
+		});
+
+		List<int> child_edge_path = new List<int>();
+		List<int> parent_edge_path = new List<int>();
+		int child_end_triangle = -1;
+		int parent_end_triangle = -1;
+		int split_vert_start = -1;
+		int split_vert_stop = -1;
+		if (need_search_child < 0 && need_search_parent < 0)
 		{
-			int vidx = parent_side_vertex[vidx_iter];
-			float new_dist = CalVertDist(mesh, path_vert, vidx);
-			if (new_dist < min_parent_dist)
-			{
-				parent_vert = vidx;
-				min_parent_dist = new_dist;
-			}
-		}
+			child_edge_path = FindTrianglePathToOtherSide(path_start_triangle, VertexIdxToEdgeId(path_vert, path_vert_other_nei)
+				, mesh, parent_side_vertex, child_side_vertex, edge_2_triangle, vert_2_neigh);
+			parent_edge_path = FindTrianglePathToOtherSide(path_start_triangle, VertexIdxToEdgeId(path_vert_neigh, path_vert)
+				, mesh, child_side_vertex, parent_side_vertex, edge_2_triangle, vert_2_neigh);
 
-		/* 用三角形边来切开三角形带
-		// 缓存顶点到所有邻居的映射
-		Dictionary<int, List<int>> vert2neigh = CalVertToNeighbour(mesh, cross_triangle);
-		// 按照方向优先寻路，以求尽可能经过更少量的点
-		List<int> child_parent_path = new List<int>();
-		bool res = CalVertPathByMinDist(mesh, child_vert, parent_vert, vert2neigh, ref child_parent_path);
-		if(!res)
+			child_end_triangle = edge_2_triangle[child_edge_path[child_edge_path.Count - 1]][0];
+			parent_end_triangle = edge_2_triangle[parent_edge_path[parent_edge_path.Count - 1]][0];
+
+			split_vert_start = path_vert;
+			split_vert_stop = path_vert_other_nei;
+		}
+		else if(need_search_child < 0)
 		{
-			Debug.LogError("Cannot find path!");
-			return;
+			child_edge_path = FindTrianglePathToOtherSide(path_start_triangle, VertexIdxToEdgeId(path_vert, need_search_parent)
+				, mesh, parent_side_vertex, child_side_vertex, edge_2_triangle, vert_2_neigh);
+			parent_edge_path = FindTrianglePathToOtherSide(path_start_triangle, VertexIdxToEdgeId(path_vert_neigh, path_vert)
+				, mesh, child_side_vertex, parent_side_vertex, edge_2_triangle, vert_2_neigh);
+
+			child_end_triangle = edge_2_triangle[child_edge_path[child_edge_path.Count - 1]][0];
+			parent_end_triangle = path_start_triangle;
+
+			split_vert_start = path_vert;
+			split_vert_stop = need_search_parent;
 		}
-		*/
+		else if (need_search_parent < 0)
+		{
+			child_edge_path = FindTrianglePathToOtherSide(path_start_triangle, VertexIdxToEdgeId(path_vert, path_vert_other_nei)
+				, mesh, parent_side_vertex, child_side_vertex, edge_2_triangle, vert_2_neigh);
+			parent_edge_path = FindTrianglePathToOtherSide(path_start_triangle, VertexIdxToEdgeId(path_vert, need_search_child)
+				, mesh, child_side_vertex, parent_side_vertex, edge_2_triangle, vert_2_neigh);
 
-		// 用三角形带来切开三角形带
-		// 建立边=>三角形的索引
-		Dictionary<int, List<int>> edge_2_triangle = GetTriangleEdge2Triangle(cross_triangle, mesh);
-		// 是否是边缘处的三角形
-		Dictionary<int, bool> triangle_is_onedge = GetTriangleIsOnEdge(edge_2_triangle);
-		// 建立三角形=>三角形的索引
-		Dictionary<int, List<int>> triangle_2_neigh = GetTriangle2TriangleList(cross_triangle, mesh, edge_2_triangle);
+			child_end_triangle = path_start_triangle;
+			parent_end_triangle = edge_2_triangle[parent_edge_path[parent_edge_path.Count - 1]][0];
 
-		// 以三角形寻路，从此边缘的某三角形开始，寻路到第一次经过的彼边缘
-		int bgn_triangle = FindOneTriangleByVertex(child_vert);
-		List<int> triangle_path; // 路径经过的三角形
-		List<int> edge_id_path_inside; // 路径经过的内部edge
-		List<int> vertex_id_inside; // 经过的所有顶点
-		FindTrianglePathToOtherSide(bgn_triangle, child_side_vertex, parent_side_vertex, out triangle_path, out edge_id_path_inside, out vertex_id_inside);
+			split_vert_start = path_vert;
+			split_vert_stop = need_search_child;
+		}
 
-		int middle_edge_id = edge_id_path_inside[edge_id_path_inside.Count / 2];
-		int middle_edge_v1, middle_edge_v2;
-		EdgeIdToVertexIdx(middle_edge_id, out middle_edge_v1, out middle_edge_v2);
-		int split_bgn_triangle = FindTriangleWithSplit(middle_edge_v1, triangle_path);
-		int split_end_triangle = FindTriangleWithSplit(middle_edge_v2, triangle_path);
+		// ！注意此步以后的vert_2_neigh已经剪掉一部分了，不是原有的数据了！
+		SplitVertNeigh(child_edge_path, vert_2_neigh, mesh);
+		SplitVertNeigh(parent_edge_path, vert_2_neigh, mesh);
+		List<int> vertex_split_path = VertexNavigation(split_vert_start, split_vert_stop, mesh, vert_2_neigh);
 
-		// 剔除用来剪断三角形带的邻边们
-		List<int> cal_cut_triangle_2_edges = ScissorPathTriangle(vertex_id_inside);
-
-		// 从断口两端开始寻路
-		List<int> cut_edge_id_path_inside, cut_vertex_id_inside;
-		FindTrianglePath(cal_cut_triangle_2_edges, split_bgn_triangle, split_end_triangle, out triangle_path, out cut_edge_id_path_inside, out cut_vertex_id_inside);
+		#if UNITY_EDITOR
+		for(int i = 0; i != vertex_split_path.Count; ++i)
+		{
+			Vector3 v1 = mesh.vertices[vertex_split_path[i]];
+			Vector3 v2 = mesh.vertices[vertex_split_path[(i+1)%vertex_split_path.Count]];
+			Debug.DrawLine(v1, v2, Color.green, 10);
+		}
+		#endif
 
 		// 生成面片！
-		Mesh surface_mesh = GeneratePathSurface(cut_vertex_id_inside);
+		Mesh surface_mesh = JMeshUtility.GenerateSurfaceMeshByVertexList(vertex_split_path, mesh.vertices);
 
 		// 剔除用来剪三角形带为两个的三角形的邻边们
-		List<int> cal_genmesh_triangle_2_edges = ScissorPathTriangle(cut_vertex_id_inside);
-		List<int> all_child_side_triangles = GetAllNeighTriangles(child_vert);
-		List<int> all_parent_side_triangles = GetAllNeighTriangles(parent_vert);
+		// ！注意此步以后的 triangle_2_neigh 已经剪掉了一部分，不是原有的数据了！
+		SplitTriangleNeigh(edge_2_triangle, vertex_split_path);
+		// 剔除后，建立三角形=>邻接三角形的索引
+		Dictionary<int, List<int>> triangle_2_neigh = GetTriangle2TriangleList(cross_triangle, mesh, edge_2_triangle);
 
-		// 生成孩子这边的mesh
-		// 生成父亲这边的mesh
-		// 合并各自的mesh
+		cross_child_triangles = GetAllNeighTriangles(child_end_triangle, triangle_2_neigh);
+		cross_parent_triangles = GetAllNeighTriangles(parent_end_triangle, triangle_2_neigh);
+	}
+
+	List<int> GetAllNeighTriangles(int triangle, Dictionary<int, List<int>> triangle_2_neigh)
+	{
+		List<int> res = new List<int>();
+		JMeshUtility.TraverseMap<int>(triangle, triangle_2_neigh, delegate(int node)
+		{
+			res.Add(node);
+			return true;
+		});
+		return res;
+	}
+
+	// 剔除 边=>三角形 中的一部分边
+	void SplitTriangleNeigh(Dictionary<int, List<int>> edge_2_triangle, List<int> vertex_path)
+	{
+		for(int i = 0; i != vertex_path.Count; ++i)
+		{
+			int vbgn = vertex_path[i];
+			int vend = vertex_path[(i+1) % vertex_path.Count];
+			int edge_id = VertexIdxToEdgeId(vbgn, vend);
+			edge_2_triangle[edge_id] = new List<int>();
+		}
+	}
+
+	int FindTriangleOtherVertex(int triangle, int edge_id, Mesh mesh)
+	{
+		int result_vert = -1;
+		TraverseTriangleEdge(triangle, mesh, delegate(int ver1, int ver2, int ver_other)
+		{
+			if (edge_id == VertexIdxToEdgeId(ver1, ver2))
+			{
+				result_vert = ver_other;
+				return false;
+			}
+			return true;
+		});
+		return result_vert;
+	}
+
+	// 从三角形带的这一侧的一个三角形开始，找到某侧的一个点为止，中途不能经过任何边缘上的点
+	List<int> FindTrianglePathToOtherSide(int bgn_triangle, int bgn_edge, Mesh mesh, Dictionary<int, bool> this_side_vers, Dictionary<int, bool> target_side_vers, Dictionary<int, List<int>> edge_2_triangle, Dictionary<int, List<int>> vert_2_neigh)
+	{
+		List<int> result_triangle_path = new List<int>();
+		List<int> result_edge_id_path_inside = new List<int>();
+
+		List<int> pathed_vers = new List<int>();
+		int bgn_edge_v1, bgn_edge_v2;
+		EdgeIdToVertexIdx(bgn_edge, out bgn_edge_v1, out bgn_edge_v2);
+		pathed_vers.Add(bgn_edge_v1);
+		pathed_vers.Add(bgn_edge_v2);
+
+		int last_edge = bgn_edge; // 上一次的边
+		int last_triangle = bgn_triangle; // 上次的三角形
+		int last_vertex = FindTriangleOtherVertex(bgn_triangle, last_edge, mesh); // 下次的顶点
+		result_triangle_path.Add(last_triangle);// 把第一个三角形加入路径
+
+		result_edge_id_path_inside.Add(last_edge); // 把上一条边放入路径
+		pathed_vers.Add(last_vertex);
+
+		// 依次寻找剩下的三角形
+		if(!target_side_vers.ContainsKey(last_vertex))
+		{
+			FindTrianglePathInner(last_triangle, last_edge, last_vertex, edge_2_triangle, pathed_vers, mesh, result_triangle_path, result_edge_id_path_inside, delegate(int vert, int triangle, int edge)
+			{
+				if(target_side_vers.ContainsKey(vert))
+				{
+					return 1;
+				}
+				else if(this_side_vers.ContainsKey(vert))
+				{
+					return -1;
+				}
+				else
+				{
+					return 0;
+				}
+			});
+
+			last_vertex = pathed_vers[pathed_vers.Count - 1];
+			last_triangle = result_triangle_path[result_triangle_path.Count - 1];
+		}
+
+#if UNITY_EDITOR
+		for (int i = 0; i != result_edge_id_path_inside.Count; ++i)
+		{
+			int result_edge_v1, result_edge_v2;
+			EdgeIdToVertexIdx(result_edge_id_path_inside[i], out result_edge_v1, out result_edge_v2);
+			Vector3 v1 = mesh.vertices[result_edge_v1];
+			Vector3 v2 = mesh.vertices[result_edge_v2];
+			Debug.DrawLine(v1, v2, Color.red, 10);
+		}
+#endif
+
+		// 尾部可能不足以把三角形带切开，应当寻找到紧贴边缘为止
+		List<int> added_edges;
+		FindTriangleToEdgeAroundOneVertex(last_vertex, last_triangle, mesh, edge_2_triangle, vert_2_neigh, out added_edges);
+		foreach(int edge_id in added_edges)
+		{
+			result_edge_id_path_inside.Add(edge_id);
+		}
+
+		return result_edge_id_path_inside;
+	}
+
+	void SplitVertNeigh(List<int> edge_id_path_inside, Dictionary<int, List<int>> vert_2_neigh, Mesh mesh)
+	{
+		if(edge_id_path_inside.Count == 0)
+		{
+			return;
+		}
+
+		// 将edgeid所代表的所有的vertex到vertex的联系断开
+		foreach (int edge_id in edge_id_path_inside)
+		{
+			int need_split_v1, need_split_v2;
+			EdgeIdToVertexIdx(edge_id, out need_split_v1, out need_split_v2);
+			List<int> v1_neigh = vert_2_neigh[need_split_v1];
+			v1_neigh.Remove(need_split_v2);
+			vert_2_neigh[need_split_v1]  = v1_neigh;
+			List<int> v2_neigh = vert_2_neigh[need_split_v2];
+			v2_neigh.Remove(need_split_v1);
+			vert_2_neigh[need_split_v2] = v2_neigh;
+		}
+	}
+
+	// 使用A*寻路，对所有顶点寻路
+	List<int> VertexNavigation(int split_start_vert, int split_stop_vert, Mesh mesh, Dictionary<int, List<int>> vert_2_neigh)
+	{
+		return JAnimationUtility.AStarNavigation<int>(split_start_vert, split_stop_vert, vert_2_neigh, delegate(int v1, int v2)
+		{
+			return (mesh.vertices[v1] - mesh.vertices[v2]).magnitude;
+		},
+		delegate(int v1, int v2)
+		{
+			return v1 == v2;
+		}
+		);
+	}
+
+	delegate int FindTrianglePathFunc(int vert, int triangle, int edge);
+	int FindTrianglePathInner(int last_triangle, int last_edge_id, int last_vertex, Dictionary<int, List<int>> edge_2_triangle
+		, List<int> checked_points, Mesh mesh, List<int> triangle_path, List<int> edge_path, FindTrianglePathFunc check_func)
+	{
+		int check_res = -1;
+		int checked_vert = -1;
+		int checked_triangle = -1;
+		int checked_edge = -1;
+		TraverseTriangleEdge(last_triangle, mesh, delegate(int v1, int v2, int vother)
+		{
+			int edge_id = VertexIdxToEdgeId(v1, v2);
+			if (edge_id == last_edge_id)
+			{
+				return true; // 继续查找
+			}
+
+			int nei_triangle = -1;
+			int nei_vert = FindTriangleOtherVertexAndTriangleByEdgeId(last_triangle, edge_id, edge_2_triangle, mesh, out nei_triangle);
+
+			if (nei_triangle > 0 && !checked_points.Exists((int v) => v == nei_vert))
+			{
+				int cur_check_res = check_func(nei_vert, nei_triangle, edge_id);
+				if (cur_check_res == -1)
+				{
+					return true; // 不合法，无视这个节点，继续查找后边的节点
+				}
+				else if (cur_check_res == 0)
+				{
+					check_res = 0;
+					checked_vert = nei_vert;
+					checked_triangle = nei_triangle;
+					checked_edge = edge_id;
+
+					checked_points.Add(checked_vert);
+					edge_path.Add(checked_edge);
+					triangle_path.Add(checked_triangle);
+					check_res = FindTrianglePathInner(checked_triangle, checked_edge, checked_vert, edge_2_triangle, checked_points, mesh, triangle_path, edge_path, check_func);
+					if(check_res == -1)
+					{
+						checked_points.RemoveAt(checked_points.Count - 1);
+						edge_path.Remove(edge_path.Count - 1);
+						triangle_path.Remove(triangle_path.Count - 1);
+						return true; // 合法，可以由此继续查找。保存下当前的情况，仍然继续此循环，看能不能找到可以终止查找的点
+					}
+					else
+					{
+						return false;
+					}
+				}
+				else
+				{
+					check_res = 1; // 查找完毕，可以终止查找
+					checked_vert = nei_vert;
+					checked_triangle = nei_triangle;
+					checked_edge = edge_id;
+
+					checked_points.Add(checked_vert);
+					edge_path.Add(checked_edge);
+					triangle_path.Add(checked_triangle);
+					return false;
+				}
+			}
+			return true;
+		});
+
+		return check_res;
+	}
+
+	// 找到一个triangle上和edge_id不同的那个点
+	int FindTriangleOtherVertexByEdgeId(int triangle, int edge_id, Mesh mesh)
+	{
+		int res_vert = -1;
+		TraverseTriangleEdge(triangle, mesh, delegate(int v1, int v2, int vother)
+		{
+			if(edge_id == VertexIdxToEdgeId(v1, v2))
+			{
+				res_vert = vother;
+				return false;
+			}
+			return true;
+		});
+		return res_vert;
+	}
+
+	// 找到edge_id上非此triangle的那个triangle和那个点
+	int FindTriangleOtherVertexAndTriangleByEdgeId(int last_triangle, int edge_id, Dictionary<int, List<int>> edge_2_triangles, Mesh mesh, out int triangle_id)
+	{
+		foreach(int triangle in edge_2_triangles[edge_id])
+		{
+			if(triangle != last_triangle)
+			{
+				triangle_id = triangle;
+				return FindTriangleOtherVertexByEdgeId(triangle, edge_id, mesh);
+			}
+		}
+		triangle_id = -1;
+		return -1;
+	}
+
+	delegate bool TraverseTriangleEdgeFunc(int v1, int v2, int vother);
+	bool TraverseTriangleEdge(int triangle, Mesh mesh, TraverseTriangleEdgeFunc traverseFunc)
+	{
+		for(int vidx_idx = 0; vidx_idx != 3; ++vidx_idx)
+		{
+			int ver1 = mesh.triangles[triangle + vidx_idx];
+			int ver2 = mesh.triangles[triangle + (vidx_idx + 1) % 3];
+			int vother = mesh.triangles[triangle + (vidx_idx + 2) % 3];
+			if(!traverseFunc(ver1, ver2, vother))
+			{
+				return false; // 提前退出
+			}
+		}
+		return true; // 正常遍历完毕退出
+	}
+
+	int FindAnyTriangleByVertex(int vert, List<int> triangle_collect, Mesh mesh)
+	{
+		foreach(int triangle in triangle_collect)
+		{
+			if(!TraverseTriangleEdge(triangle, mesh, delegate(int v1, int v2, int v3)
+			{
+				if(v1 == vert)
+				{
+					return false;
+				}
+				return true;
+			}))
+			{
+				return triangle;
+			}
+		}
+		return -1;
+	}
+
+	// 在给定的三角形中，找到一个包含指定vertex的三角形
+	[System.Obsolete("Useless now.", true)]
+	bool FindEdgeTriangleByVertex(int vert, Mesh mesh, Dictionary<int, List<int>> vert_2_neigh, Dictionary<int, List<int>> edge_2_triangle
+		, out int triangle, out int edge_id)
+	{
+		foreach(int neigh_vert in vert_2_neigh[vert])
+		{
+			edge_id = VertexIdxToEdgeId(vert, neigh_vert);
+			if(edge_2_triangle[edge_id].Count == 1)
+			{
+				triangle = edge_2_triangle[edge_id][0];
+				return true;
+			}
+		}
+		triangle = -1;
+		edge_id = -1;
+		return false;
 	}
 
 	float CalVertDist(Mesh mesh, int vidx1, int vidx2)
@@ -588,7 +966,7 @@ public class JMeshSplitByBone : MonoBehaviour {
 	}
 
 	// 获得顶点=>三角形列表
-	Dictionary<int, List<int>> CalPathTriangles(List<int> path, Mesh mesh, List<int> cross_triangles)
+	Dictionary<int, List<int>> CalPathTriangles(List<int> path, Mesh mesh, int[] cross_triangles)
 	{
 		Dictionary<int, List<int>> vidx2triangle = new Dictionary<int, List<int>>();
 		foreach (int path_v in path)
@@ -688,6 +1066,7 @@ public class JMeshSplitByBone : MonoBehaviour {
 	}
 
 	// 因为三角形有可能有两个边都在轮廓上，所以不返回特定的edgeid
+	[System.Obsolete("Useless now.")]
 	Dictionary<int, bool> GetTriangleIsOnEdge(Dictionary<int, List<int>> edge_2_triangle)
 	{
 		Dictionary<int, bool> res = new Dictionary<int, bool>();
@@ -699,5 +1078,60 @@ public class JMeshSplitByBone : MonoBehaviour {
 			}
 		}
 		return res;
+	}
+	
+	// 对于一个有vert碰到边缘了三角形，计算将其寻路到有edge贴着边缘时的三角形列表和edge列表
+	void FindTriangleToEdgeAroundOneVertex(int around_vertex, int last_triangle, Mesh mesh, Dictionary<int, List<int>> edge_2_triangles, Dictionary<int, List<int>> vert_2_neigh, out List<int> added_edges)
+	{
+		bool is_already_ok = false;
+		int edge_id = -1;
+		int next_vert = -1;
+		TraverseTriangleEdge(last_triangle, mesh, delegate(int v1, int v2, int v3)
+		{
+			if(v1 == around_vertex)
+			{
+				if(edge_2_triangles[VertexIdxToEdgeId(v2, v1)].Count == 1)
+				{
+					edge_id = VertexIdxToEdgeId(v2, v1);
+					next_vert = v2;
+					is_already_ok = true;
+				}
+				else if (edge_2_triangles[VertexIdxToEdgeId(v3, v1)].Count == 1)
+				{
+					edge_id = VertexIdxToEdgeId(v3, v1);
+					next_vert = v3;
+					is_already_ok = true;
+				}
+				else
+				{
+					edge_id = VertexIdxToEdgeId(v2, v1);
+					next_vert = v2;
+					is_already_ok = false;
+				}
+
+				return false;
+			}
+			return true;
+		});
+
+		added_edges = new List<int>();
+		added_edges.Add(edge_id);
+		if(is_already_ok)
+		{
+			return;
+		}
+
+		int max_loop = vert_2_neigh[around_vertex].Count;
+		while(--max_loop >= 0)
+		{
+			if(edge_2_triangles[edge_id].Count == 1)
+			{
+				break;
+			}
+
+			next_vert = FindTriangleOtherVertexAndTriangleByEdgeId(last_triangle, edge_id, edge_2_triangles, mesh, out last_triangle);
+			edge_id = VertexIdxToEdgeId(around_vertex, next_vert);
+			added_edges.Add(edge_id);
+		}
 	}
 }
