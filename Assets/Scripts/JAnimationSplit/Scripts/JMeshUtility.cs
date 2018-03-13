@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using UnityEngine;
 
+using UnityEditor;
+
 public class JMeshUtility
 {
 	#region 把一条vertex的路径连成一个面
@@ -73,7 +75,7 @@ public class JMeshUtility
 	#endregion
 
 	#region 从一个Mesh中分离一部分三角形新建mesh
-	public static Mesh SplitTriangleToMesh(int[] triangles, Mesh origin_mesh)
+	public static Mesh SplitTriangleToMesh(int[] triangles, Mesh origin_mesh, int[] origin_triangles, Dictionary<int, BoneWeight> vertex_bone_reset)
 	{
 		// 整理出所有感兴趣的vertex
 		int[] old_vertex_interested = new int[origin_mesh.vertices.Length];
@@ -86,9 +88,9 @@ public class JMeshUtility
 		{
 			for(int vidx_idx = 0; vidx_idx != 3; ++vidx_idx)
 			{
-				if (old_vertex_interested[origin_mesh.triangles[triangle + vidx_idx]] < 0)
+				if (old_vertex_interested[origin_triangles[triangle + vidx_idx]] < 0)
 				{
-					old_vertex_interested[origin_mesh.triangles[triangle + vidx_idx]] = 0;
+					old_vertex_interested[origin_triangles[triangle + vidx_idx]] = 0;
 					++ real_vertex_count;
 				}
 			}
@@ -114,7 +116,10 @@ public class JMeshUtility
 				new_uv_arr[new_vertex_iter] = origin_mesh.uv[i];
 				new_normal_arr[new_vertex_iter] = origin_mesh.normals[i];
 				new_tangent_arr[new_vertex_iter] = origin_mesh.tangents[i];
-				if (has_new_boneweight) { new_boneweight[new_vertex_iter] = origin_mesh.boneWeights[i]; }
+				if (has_new_boneweight)
+				{
+					new_boneweight[new_vertex_iter] = vertex_bone_reset.ContainsKey(i) ? vertex_bone_reset[i] : origin_mesh.boneWeights[i];
+				}
 				if (has_new_uv2) { new_uv2_arr[new_vertex_iter] = origin_mesh.uv2[i]; }
 				if (has_new_uv3) { new_uv3_arr[new_vertex_iter] = origin_mesh.uv3[i]; }
 				if (has_new_uv4) { new_uv4_arr[new_vertex_iter] = origin_mesh.uv4[i]; }
@@ -129,9 +134,9 @@ public class JMeshUtility
 		for(int tri_idx = 0; tri_idx != triangles.Length; ++tri_idx)
 		{
 			int triangle = triangles[tri_idx];
-			new_triangle_arr[tri_idx * 3 + 0] = old_vertex_interested[origin_mesh.triangles[triangle + 0]];
-			new_triangle_arr[tri_idx * 3 + 1] = old_vertex_interested[origin_mesh.triangles[triangle + 1]];
-			new_triangle_arr[tri_idx * 3 + 2] = old_vertex_interested[origin_mesh.triangles[triangle + 2]];
+			new_triangle_arr[tri_idx * 3 + 0] = old_vertex_interested[origin_triangles[triangle + 0]];
+			new_triangle_arr[tri_idx * 3 + 1] = old_vertex_interested[origin_triangles[triangle + 1]];
+			new_triangle_arr[tri_idx * 3 + 2] = old_vertex_interested[origin_triangles[triangle + 2]];
 		}
 
 		Mesh result = new Mesh();
@@ -147,6 +152,41 @@ public class JMeshUtility
 		result.normals = new_normal_arr;
 		result.tangents = new_tangent_arr;
 		return result;
+	}
+	#endregion
+
+	#region 组合蒙皮模型
+	static public Mesh CombineSkinnedMeshesOfSameBone(CombineInstance[] comb_arr, string name)
+	{
+		int vertex_count = 0;
+		foreach(CombineInstance comb in comb_arr)
+		{
+			vertex_count += comb.mesh.vertices.Length;
+		}
+
+		// 直接拷贝原来的 bone_weight
+		BoneWeight[] bone_weight = new BoneWeight[vertex_count];
+		int bone_weight_iter = 0;
+		foreach(CombineInstance comb in comb_arr)
+		{
+			foreach(BoneWeight bw in comb.mesh.boneWeights)
+			{
+				bone_weight[bone_weight_iter] = bw;
+				++bone_weight_iter;
+			}
+		}
+		
+		Mesh res = new Mesh();
+		res.CombineMeshes(comb_arr, false);
+		res.boneWeights = bone_weight;
+		res.bindposes = comb_arr[0].mesh.bindposes;
+
+		string new_filename = "Assets/" + name + ".fbx.asset";
+		AssetDatabase.DeleteAsset(new_filename);
+		AssetDatabase.CreateAsset(res, new_filename);
+		AssetDatabase.SaveAssets();
+
+		return res;
 	}
 	#endregion
 }
