@@ -787,4 +787,91 @@ public class JAnimationUtility : MonoBehaviour
 		return null;
 	}
 	#endregion
+
+	#region 工具函数：A* 寻路
+	public delegate float NodeTypeDistFunc<NodeType>(NodeType lh, NodeType rh);
+	public delegate bool NodeTypeEqualFunc<NodeType>(NodeType lh, NodeType rh);
+	public delegate float NodeTypeComparer<NodeType>(NodeType lh, NodeType rh);
+	public static int FindMinInList<NodeType>(List<NodeType> type, NodeTypeComparer<NodeType> comparer)
+	{
+		int res = -1;
+		NodeType min = default(NodeType);
+		for(int i = 0; i != type.Count; ++i)
+		{
+			if(res == -1)
+			{
+				res = i;
+				min = type[i];
+			}
+			else
+			{
+				if(comparer(type[i], min) < 0)
+				{
+					res = i;
+					min = type[i];
+				}
+			}
+		}
+		return res;
+	}
+
+	public static List<NodeType> AStarNavigation<NodeType>(NodeType start_node, NodeType target_node
+		, Dictionary<NodeType, List<NodeType>> node_neighbours
+		, NodeTypeDistFunc<NodeType> dist_comparer, NodeTypeEqualFunc<NodeType> equal_compara)// where NodeType: Comparer
+	{
+		List<NodeType> open_set = new List<NodeType>();
+		Dictionary<NodeType, bool> closed_set = new Dictionary<NodeType,bool>();
+
+		Dictionary<NodeType, NodeType> path = new Dictionary<NodeType,NodeType>();
+		Dictionary<NodeType, float> node_to_bgn_dist = new Dictionary<NodeType, float>();
+		Dictionary<NodeType, float> node_heuristic_dist = new Dictionary<NodeType, float>();
+
+		open_set.Add(start_node);
+		node_to_bgn_dist[start_node] = 0;
+		node_heuristic_dist[start_node] = dist_comparer(start_node, target_node);
+		NodeType cur_node = start_node;
+
+		while(open_set.Count != 0)
+		{
+			int cur_node_idx = JAnimationUtility.FindMinInList<NodeType>(open_set, delegate(NodeType lnode, NodeType rnode)
+			{
+				return node_heuristic_dist[lnode] - node_heuristic_dist[rnode];
+			});
+
+			cur_node = open_set[cur_node_idx];
+			if (equal_compara(cur_node, target_node)) // 这个不太准确，todo
+			{
+				path[target_node] = cur_node;
+				break; // 找到了
+			}
+			open_set.RemoveAt(cur_node_idx);
+			closed_set[cur_node] = true;
+
+			foreach(NodeType neigh_node in node_neighbours[cur_node])
+			{
+				if(!closed_set.ContainsKey(neigh_node))
+				{
+					open_set.Add(neigh_node);
+					float new_dist = node_to_bgn_dist[cur_node] + dist_comparer(neigh_node, cur_node);
+					if(!node_to_bgn_dist.ContainsKey(neigh_node) || node_to_bgn_dist[neigh_node] > new_dist)
+					{
+						node_to_bgn_dist[neigh_node] = new_dist;
+						path[neigh_node] = cur_node;
+					}
+					node_heuristic_dist[neigh_node] = node_to_bgn_dist[neigh_node] + dist_comparer(neigh_node, target_node);
+				}
+			}
+		}
+
+		NodeType iter_node = target_node;
+		List<NodeType> res = new List<NodeType>();
+		res.Add(target_node);
+		while (!equal_compara(start_node, iter_node) && path.ContainsKey(iter_node))
+		{
+			iter_node = path[iter_node];
+			res.Add(iter_node);
+		}
+		return res;
+	}
+	#endregion
 }
